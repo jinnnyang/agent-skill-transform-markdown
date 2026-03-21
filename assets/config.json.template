@@ -1,0 +1,5 @@
+{
+    "endpoint": "YOUR_API_ENDPOINT_HERE",
+    "api_key": "YOUR_API_KEY_HERE",
+    "model_id": "YOUR_MODEL_ID_HERE"
+}
