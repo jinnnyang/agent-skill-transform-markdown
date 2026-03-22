@@ -100,4 +100,8 @@ def main():
         read_range(file_path, args.range)
 
 if __name__ == "__main__":
+    # Force UTF-8 encoding for stdout
+    import io,sys
+    if sys.stdout.encoding != 'utf-8':
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
     main()
