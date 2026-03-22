@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent.resolve()))
 
 try:
     from openai import OpenAI
-    from markdown_parser import MarkdownParser, MarkdownRenderer, Node, Text
+    from markdown_parser import MarkdownParser, MarkdownRenderer, Node, Text, Heading
 except ImportError as e:
     print(f"错误：无法导入必要的模块。请确保 'openai.py' 和 'markdown_parser.py' 与此脚本位于同一目录中。")
     print(f"详细信息: {e}")
@@ -57,10 +57,12 @@ def call_llm(client: OpenAI, model_id: str, prompt: str) -> str | None:
         print(f"  - 错误：API 请求期间发生错误: {e}")
         return None
 
-def process_raw(text: str, client: OpenAI, model_id: str, prompt_template: str, prompt_args: dict) -> str | None:
+def process_raw(text: str, client: OpenAI, model_id: str, prompt_template: str, prompt_args: dict, lookback_context: str = "", global_outline: str = "") -> str | None:
     """原始模式处理：将整个文本作为单个单元进行转换。"""
     format_args = prompt_args.copy()
     format_args['text'] = text
+    format_args['lookback_context'] = lookback_context
+    format_args['global_outline'] = global_outline
     try:
         prompt = prompt_template.format(**format_args)
     except KeyError as e:
@@ -69,7 +71,7 @@ def process_raw(text: str, client: OpenAI, model_id: str, prompt_template: str, 
     
     return call_llm(client, model_id, prompt)
 
-def _transform_node_recursive(node: Node, client: OpenAI, model_id: str, prompt_template: str, prompt_args: dict) -> Node:
+def _transform_node_recursive(node: Node, client: OpenAI, model_id: str, prompt_template: str, prompt_args: dict, lookback_context: str = "", global_outline: str = "") -> Node:
     """递归遍历并转换 AST 节点。"""
     # 1. 如果是文本节点，则转换其内容
     if isinstance(node, Text):
@@ -81,6 +83,8 @@ def _transform_node_recursive(node: Node, client: OpenAI, model_id: str, prompt_
         # 使用与原始模式相同的格式化逻辑
         format_args = prompt_args.copy()
         format_args['text'] = node.text
+        format_args['lookback_context'] = lookback_context
+        format_args['global_outline'] = global_outline
         try:
             prompt = prompt_template.format(**format_args)
         except KeyError as e:
@@ -103,7 +107,7 @@ def _transform_node_recursive(node: Node, client: OpenAI, model_id: str, prompt_
         return node.__class__(**args)
 
     # 3. 如果是容器节点，则对其子节点进行递归转换
-    new_children = [_transform_node_recursive(child, client, model_id, prompt_template, prompt_args) for child in node.children]
+    new_children = [_transform_node_recursive(child, client, model_id, prompt_template, prompt_args, lookback_context, global_outline) for child in node.children]
     
     # 创建一个具有已转换子节点的新容器节点
     new_node_args = node.__dict__.copy()
@@ -114,7 +118,7 @@ def _transform_node_recursive(node: Node, client: OpenAI, model_id: str, prompt_
     new_node_args.pop('parent', None)
     return node.__class__(**new_node_args)
 
-def process_ast(text: str, client: OpenAI, model_id: str, prompt_template: str, prompt_args: dict) -> str | None:
+def process_ast(text: str, client: OpenAI, model_id: str, prompt_template: str, prompt_args: dict, lookback_context: str = "", global_outline: str = "") -> str | None:
     """AST 模式处理：解析、遍历、转换和重新渲染。"""
     parser = MarkdownParser()
     renderer = MarkdownRenderer()
@@ -123,10 +127,40 @@ def process_ast(text: str, client: OpenAI, model_id: str, prompt_template: str, 
     original_root = parser.parse(text)
     
     print("  - 正在递归转换 AST 节点...")
-    transformed_root = _transform_node_recursive(original_root, client, model_id, prompt_template, prompt_args)
+    transformed_root = _transform_node_recursive(original_root, client, model_id, prompt_template, prompt_args, lookback_context, global_outline)
     
     print("  - 正在将新的 AST 渲染回 Markdown...")
     return renderer.render(transformed_root)
+
+def generate_global_outline(files_to_process: list[tuple[Path, Path]]) -> str:
+    """遍历所有输入文件并生成一个全局的 Markdown 大纲。"""
+    print("--- 正在生成全局大纲 ---")
+    parser = MarkdownParser()
+    full_outline = []
+
+    for src, _ in files_to_process:
+        try:
+            with open(src, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            root = parser.parse(content)
+            
+            for node in root.children:
+                if isinstance(node, Heading):
+                    # 提取纯文本标题内容
+                    title_text = ''.join(child.text for child in node.children if isinstance(child, Text))
+                    # 创建 Markdown 格式的标题行
+                    full_outline.append(f"{'#' * node.level} {title_text}")
+        except Exception as e:
+            print(f"  - 警告：解析文件 {src.name} 以生成大纲时出错: {e}")
+            continue
+            
+    outline_str = "\n".join(full_outline)
+    if outline_str:
+        print("--- 全局大纲生成完毕 ---")
+    else:
+        print("--- 未在任何文件中找到标题，无法生成大纲 ---")
+    return outline_str
 
 def main():
     parser = argparse.ArgumentParser(
@@ -148,6 +182,10 @@ def main():
     
     # --- 模式切换 ---
     parser.add_argument('--ast-node', action='store_true', help='启用 AST 节点模式。在此模式下，脚本将逐个处理文本节点以保留 Markdown 结构。')
+
+    # --- 新增的上下文参数 ---
+    parser.add_argument('--lookback', type=int, default=0, help='回顾上一个文件末尾的字符数，以提供上下文。默认为 0（不回顾）。')
+    parser.add_argument('--heading-adjustment', action='store_true', help='启用全局大纲分析和标题级别自动调整功能。')
 
     args = parser.parse_args()
 
@@ -213,6 +251,13 @@ def main():
     print(f"模式: {'AST 节点模式' if args.ast_node else '原始文本模式'}")
     print(f"找到 {len(files_to_process)} 个文件。")
 
+    # --- 5. (可选) 生成全局大纲 ---
+    global_outline = ""
+    if args.heading_adjustment:
+        global_outline = generate_global_outline(files_to_process)
+
+    # --- 6. 循环处理文件 ---
+    previous_chunk_content = ""
     for src, dest in files_to_process:
         print(f"\n--- 正在处理: {src.name} ---")
         try:
@@ -223,12 +268,18 @@ def main():
                 print("  - 文件为空，直接复制。")
                 with open(dest, 'w', encoding='utf-8') as f:
                     f.write(source_text)
+                previous_chunk_content = source_text
                 continue
 
+            # 为 lookback 功能准备上下文
+            lookback_context = previous_chunk_content[-args.lookback:] if args.lookback > 0 and previous_chunk_content else ""
+            if lookback_context:
+                print(f"  - 使用 {len(lookback_context)} 字符的 lookback 上下文。")
+
             if args.ast_node:
-                transformed_text = process_ast(source_text, client, model_id, prompt_template, prompt_args)
+                transformed_text = process_ast(source_text, client, model_id, prompt_template, prompt_args, lookback_context, global_outline)
             else:
-                transformed_text = process_raw(source_text, client, model_id, prompt_template, prompt_args)
+                transformed_text = process_raw(source_text, client, model_id, prompt_template, prompt_args, lookback_context, global_outline)
 
             if transformed_text is None:
                 print(f"失败: {src.name}。转换失败。")
@@ -237,6 +288,9 @@ def main():
             with open(dest, 'w', encoding='utf-8') as f:
                 f.write(transformed_text)
             print(f"成功: {src.name} -> {dest}")
+
+            # 为下一个循环更新 lookback 内容
+            previous_chunk_content = source_text
 
         except Exception as e:
             print(f"处理文件 {src.name} 时发生意外错误: {e}")

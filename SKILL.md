@@ -68,6 +68,58 @@ python <transform-markdown-skill-path>/scripts/merge.py --input-dir "./cache/out
 
 ---
 
+### 工作流 3: 上下文感知的智能转换
+
+这个高级工作流利用了 `--lookback` 和 `--heading-adjustment` 参数，以解决在处理拆分文档时遇到的两个核心问题：边界处的文本连续性和全局标题层级的一致性。
+
+**使用场景**:
+- 当您需要确保拆分块之间的句子和段落能够平滑过渡时。
+- 当您需要自动纠正和统一合并后文档的标题层级时。
+
+#### **第 1 步: 拆分 (Split)**
+
+此步骤与标准工作流相同。
+
+```bash
+# 将 my_book.md 拆分成大小约 4000 字符的块
+python <transform-markdown-skill-path>/scripts/split.py --filename "my_book.md" --size 4000 --output-dir "./cache/input_chunks/"
+```
+
+#### **第 2 步: 上下文感知转换 (Context-Aware Transform)**
+
+这是此工作流的关键。我们使用新的参数和专门设计的 Prompt 模板。
+
+```bash
+# 使用 --lookback 和 --heading-adjustment 参数进行转换
+python <transform-markdown-skill-path>/scripts/transform.py ^
+  --input "./cache/input_chunks/" ^
+  --output "./cache/output_chunks/" ^
+  --api-key "YOUR_API_KEY" ^
+  --base-url "https://api.example.com/v1" ^
+  --model-id "gpt-4-turbo" ^
+  --prompt-template "<transform-markdown-skill-path>/references/context-aware-transform.md" ^
+  --prompt-arguments "source_lang=English,target_lang=Chinese" ^
+  --ast-node ^
+  --lookback 200 ^
+  --heading-adjustment
+```
+*   `--lookback 200`: 在处理每个块时，向前看前一个块的最后 200 个字符，以确保句子连续性。
+*   `--heading-adjustment`: 启用全局大纲分析，自动调整每个块中的标题级别。
+*   `--prompt-template`: 使用 `context-aware-transform.md`，这个模板经过专门设计，可以指导 LLM 如何利用 `lookback` 和 `heading` 上下文。
+
+#### **第 3 步: 合并 (Merge)**
+
+此步骤与标准工作流相同。
+
+```bash
+# 合并所有处理好的块
+python <transform-markdown-skill-path>/scripts/merge.py --input-dir "./cache/output_chunks/" --filename "my_book_translated_smart.md"
+```
+
+通过这个工作流，`my_book_translated_smart.md` 将拥有更流畅的文本过渡和更规范的标题结构。
+
+---
+
 ### 工作流 2: 探查与局部读取
 
 在处理一个未知的超大文件前，使用 `read.py` 可以帮您节省大量时间和Token。
@@ -107,7 +159,7 @@ python <transform-markdown-skill-path>/scripts/read.py --filename "my_very_large
 
 -   `markdown_parser.py`: **核心引擎**。一个强大的、从头构建的Markdown解析器和渲染器，为所有其他脚本提供AST（抽象语法树）处理能力。
 -   `split.py`: **拆分器**。将一个大型Markdown文件安全地拆分成多个保留格式的小文件块。
--   `transform.py`: **转换器**。调用LLM对文件或文件块进行“原始”或“AST节点”模式的文本转换。
+-   `transform.py`: **转换器**。调用LLM对文件或文件块进行“原始”或“AST节点”模式的文本转换。现在支持上下文感知的转换，能够处理块之间的连续性和标题层级。
 -   `merge.py`: **合并器**。将多个文件块按正确顺序无缝地合并成一个单一的Markdown文档。
 -   `read.py`: **阅读器**。用于高效地生成大型Markdown文件的大纲或读取指定行范围。
 -   `openai.py`: 一个无外部依赖的轻量级OpenAI API客户端。
